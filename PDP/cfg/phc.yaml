@@ -1,0 +1,90 @@
+_target_: pdp.workspace.DiffusionPolicyWorkspace
+
+dataset:
+    _target_: pdp.dataset.phc_dataset.DiffusionPolicyDatasetPHC
+    data_path: /home/milo/Documents/phd/VideoMimic/PDP/data/phc_0.05
+    horizon: 6
+    pad_after: 0 # 7
+    pad_before: 0 # 1
+    cache_data: True
+
+dataloader:
+    batch_size: 512
+    num_workers: 8
+    persistent_workers: false
+    pin_memory: true
+    shuffle: true
+    drop_last: true
+
+val_dataloader:
+    batch_size: 1024
+    num_workers: 1
+    persistent_workers: false
+    pin_memory: true
+    shuffle: false
+
+ema:
+    _target_: pdp.utils.ema_model.EMAModel
+    inv_gamma: 1.0
+    max_value: 0.9999
+    min_value: 0.0
+    power: 0.75
+    update_after_step: 0
+
+logging:
+    group: null
+    id: null
+    mode: online
+    name: null
+    project: pdp
+    resume: true
+
+optimizer:
+    betas:
+        - 0.9
+        - 0.95
+    lr: 0.0001
+    weight_decay: 0.001
+
+policy: # TODO
+    _target_: pdp.policy.DiffusionPolicy
+    model:
+        _target_: pdp.modules.TransformerForDiffusion
+        obs_type: ref
+        causal_attn: True # (needed for the observation)
+        past_action_visible: False # <------------------------------------- CHECK
+        obs_dim: 357
+        input_dim: 69 # actions
+        output_dim: 69 # actions
+        emb_dim: 256
+        T_obs: 4
+        T_action: 2
+        n_encoder_layers: 2
+        n_decoder_layers: 4
+        n_head: 4
+        p_drop_attn: 0.1
+        p_drop_emb: 0.0
+    noise_scheduler:
+        _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+        beta_end: 0.02
+        beta_schedule: squaredcos_cap_v2
+        beta_start: 0.0001
+        clip_sample: true
+        num_train_timesteps: 10
+        prediction_type: sample
+        variance_type: fixed_small
+
+training:
+    save_checkpoint_every: 300   # epochs
+    log_step_freq: 1000
+    debug: false
+    logging: true
+    use_ema: true
+    device: cuda:0
+    lr_scheduler: cosine
+    lr_warmup_steps: 100
+    num_epochs: 1500
+    rollout_every: 25   # TODO: Maybe implement policy rollouts during training
+    seed: 42
+    tqdm_interval_sec: 1.0
+    val_every: 25       # TODO: Maybe implement val set evaluation during training
