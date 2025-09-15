@@ -6,7 +6,7 @@ dataset:
     horizon: 6
     pad_after: 0 # 7
     pad_before: 0 # 1
-    cache_data: True
+    cache_data: False #False is debug mode, dont fully load the ds
 
 dataloader:
     batch_size: 512
@@ -75,6 +75,8 @@ policy: # TODO
         variance_type: fixed_small
 
 training:
+    is_finetune: True
+    ckpt_path: /home/milo/Documents/phd/VideoMimic/PDP/outputs/2025.09.15/08.55.01_pdp_phc/checkpoints/checkpoint_epoch_1.ckpt
     save_checkpoint_every: 1   # epochs
     log_step_freq: 1000
     debug: false

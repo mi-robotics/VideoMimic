@@ -32,6 +32,10 @@ class TransformerForDiffusion(nn.Module):
         n_encoder_layers=4, n_decoder_layers=4, n_head=4,
         p_drop_emb=0.1, p_drop_attn=0.1,
         obs_type=None, causal_attn=False, past_action_visible=False,
+        ####
+        use_image_conds=False, image_cond_method=None, image_encoder=None,
+        image_embedding_units=None,
+        finetune_node=None
     ):
         super().__init__()
         assert T_obs is not None
@@ -102,7 +106,41 @@ class TransformerForDiffusion(nn.Module):
         logger.info(
             "number of parameters: %e", sum(p.numel() for p in self.parameters())
         )
-    
+
+        ####
+        ####
+        ####
+        ####
+        ####
+        self.use_image_conds = use_image_conds
+        self.image_encoder = image_encoder
+        self.image_cond_method = image_cond_method
+        self.image_embedding_units = image_embedding_units
+        self.finetune_node = finetune_node
+        if self.use_image_conds:
+            assert self.finetune_node in ['encoder', 'encoder_mdm']
+            assert self.image_cond_method in ['pdp_encoder', 'pdp_decoder', 'film_encoder', 'film_decoder', 'adaln_encoder', 'adaln_decoder']   
+            assert self.image_encoder in ['dinov2', 'dinov3']
+            assert len(self.image_embedding_units) >= 1
+
+            self.image_backbone_fn, img_enc_conf = None, None, None # load_image_encoder(self.image_encoder)
+            img_encoder_layers = []
+            in_units = 2*img_enc_conf['emb_dim']
+            for unit in self.image_embedding_units:
+                img_encoder_layers.append(torch.nn.Linear(in_units, unit))
+                img_encoder_layers.append(torch.nn.GeLU())
+                img_encoder_layers.append(torch.nn.Dropout(0.1))
+                in_units = unit
+            img_encoder_layers.append(torch.nn.Linear(in_units, self.emb_dim))
+            self.image_encoder = torch.nn.Sequential(*img_encoder_layers)
+
+            if 'pdp' in self.image_cond_method:
+                self.film = torch.nn.Sequential(
+                    nn.SiLU(),
+                    nn.Linear(self.emb_dim, 2*self.emb_dim, bias=True)
+                )
+
+
     def _init_weights(self, module):
         ignore_types = (
             nn.Dropout, 
@@ -215,12 +253,29 @@ class TransformerForDiffusion(nn.Module):
         if len(timestep.shape) == 0:
             timestep = timestep[None].to(sample.device)
 
+        if self.use_image_conds:
+            assert 'image_conds' in kwargs
+            #TODO two image must come in
+            img = kwargs['image_conds'].to(sample.device)
+            img_emb = self.image_backbone_fn(img)
+            img_emb_0 = img_emb[0::2]
+            img_emb_1 = img_emb[1::2]
+            img_emb = torch.cat([img_emb_0, img_emb_1], dim=-1)
+            img_emb = self.image_encoder(img_emb)
+
+
         # Encoder for conditioning
         timesteps = timestep.expand(sample.shape[0])
         time_emb = self.time_emb(timesteps).unsqueeze(1)
         # (B, 1, obs_dim)
 
         cond_emb = self.cond_obs_emb(cond)
+
+        if self.use_image_conds and self.image_cond_method == 'pdp_encoder':
+            scale, shift = self.film(img_emb).chunk(2, dim=-1)
+            cond_emb = cond_emb * (scale.unsqueeze(0) + 1) + shift.unsqueeze(0)
+         
+
         cond_emb = torch.cat([time_emb, cond_emb], dim=1)
         # (B, T_cond, obs_dim)
 
@@ -233,6 +288,10 @@ class TransformerForDiffusion(nn.Module):
 
         # Decoder for action prediction
         input_emb = self.input_emb(sample)
+        if self.use_image_conds and self.image_cond_method == 'pdp_decoder':
+            scale, shift = self.film(img_emb).chunk(2, dim=-1)
+            input_emb = input_emb * (scale.unsqueeze(0) + 1) + shift.unsqueeze(0)
+
         t = sample.shape[1]
         pos_emb = self.pos_emb[:, :t, :]
         x = self.drop(input_emb + pos_emb)
