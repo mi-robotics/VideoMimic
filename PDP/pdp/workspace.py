@@ -83,8 +83,6 @@ class DiffusionPolicyWorkspace:
             # Freeze non-image encoder parameters for fine-tuning
             self.freeze_non_image_params()
 
-        print('GOT HERE ===============================')
-        input()
 
     @property
     def output_dir(self):
@@ -176,7 +174,45 @@ class DiffusionPolicyWorkspace:
     def load_payload(self, payload, load_optimizer=True, **kwargs):       
         print(f"Available checkpoint keys: {list(payload['state_dicts'].keys())}")
         
+    def load_model_for_finetuning(self, payload):
+        missing_keys, unexpected_keys = self.model.load_state_dict(payload['state_dicts']['ema_model'], strict=False)
+        # Check if there are missing keys (which is expected when loading non-image checkpoint into image model)
+        if missing_keys:
+            # Check if all missing keys are image encoder related
+            image_encoder_patterns = ['image_encoder', 'film']
+            non_image_keys = [key_name for key_name in missing_keys 
+                            if not any(pattern in key_name for pattern in image_encoder_patterns)]
+            
+            if non_image_keys:
+                print(f"ERROR: Missing non-image encoder parameters: {non_image_keys}")
+                print(f"All missing parameters: {missing_keys}")
+                raise RuntimeError(f"Unexpected missing parameters found: {non_image_keys}")
+            else:
+                print(f"INFO: All missing parameters are image encoder related: {missing_keys}")
+                print("This is expected when loading a non-image checkpoint into an image-conditioned model.")
+
+        # Check for unexpected keys (parameters in checkpoint that don't exist in current model)
+        if unexpected_keys:
+            print(f"Unexpected keys: {unexpected_keys}")
+            print("These parameters from the checkpoint were ignored.")
+            raise RuntimeError(f'Unexpected keys in checkpoint {unexpected_keys}')
+            
+        self.ema_model = copy.deepcopy(self.model)
+        self.ema_model.set_normalizer(self.model.normalizer)
+        self.ema_model.to(self.device)
+        self.freeze_non_image_params()
+
+    def load_payload(self, payload, load_optimizer=True, **kwargs):       
+        print(f"Available checkpoint keys: {list(payload['state_dicts'].keys())}")
+        
         for key, value in payload['state_dicts'].items():
+            if key == 'optimizer' and not load_optimizer:
+                continue
+                
+            self.__dict__[key].load_state_dict(value, strict=False, **kwargs)
+               
+
+    def load_checkpoint(self, path=None, tag='latest', load_optimizer=True, **kwargs):
             if key == 'optimizer' and not load_optimizer:
                 continue
                 
@@ -187,10 +223,39 @@ class DiffusionPolicyWorkspace:
         if path is None:
             path = self.get_checkpoint_path(tag=tag)
         else:   
+        else:   
             path = pathlib.Path(path)
         payload = torch.load(path.open('rb'), pickle_module=dill, **kwargs)
         self.load_payload(payload, load_optimizer=load_optimizer)
+        self.load_payload(payload, load_optimizer=load_optimizer)
         return payload
+
+    def freeze_non_image_params(self):
+        """Freeze all parameters except image encoder related ones for fine-tuning"""
+        if not self.model.use_image_conds:
+            print("Warning: Model doesn't use image conditions, nothing to freeze")
+            return
+        
+        frozen_count = 0
+        trainable_count = 0
+        
+        for name, param in self.model.named_parameters():
+            is_image_param = any(pattern in name for pattern in ['image_encoder', 'film'])
+            
+            if is_image_param:
+                param.requires_grad = True
+                trainable_count += 1
+            else:
+                param.requires_grad = False
+                frozen_count += 1
+        
+        print(f"Frozen {frozen_count} non-image encoder parameters")
+        print(f"Trainable parameters: {trainable_count}")
+        
+        # Recreate optimizer with only trainable parameters
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        self.optimizer = torch.optim.AdamW(trainable_params, **self.cfg.optimizer)
+        print(f"Recreated optimizer with {len(trainable_params)} trainable parameters")
 
     def freeze_non_image_params(self):
         """Freeze all parameters except image encoder related ones for fine-tuning"""
@@ -265,7 +330,9 @@ class DiffusionPolicyWorkspace:
         # self.accelerator.wait_for_everyone()
         train_losses = list()
         for local_epoch_idx in range(cfg.training.num_epochs):
+            print(f'STARTING EPOCH =============================== {local_epoch_idx}')
             for batch_idx, batch in enumerate(load_loop(self.train_dataloader)):
+
            
                 batch = dict_apply(batch, lambda x: x.to(self.device))
            
@@ -284,12 +351,12 @@ class DiffusionPolicyWorkspace:
                 train_losses.append(loss_cpu)
                 step_log = {
                     'train_loss': loss_cpu,
-                    'global_step': self.global_step,
+                    # 'global_step': self.global_step,
                     'epoch': self.epoch,
                     'lr': lr_scheduler.get_last_lr()[0]
                 }
 
-                if self.global_step > 0 and self.cfg.training.log_step_freq % self.global_step == 0:
+                if self.global_step % self.cfg.training.log_step_freq  == 0:
                     self.log_step(locals())
 
                 self.global_step += 1
@@ -304,6 +371,8 @@ class DiffusionPolicyWorkspace:
             step_log = locs['step_log']
             step_log['train_loss'] = np.mean(locs['train_losses'])
             wandb_run.log(step_log, step=self.global_step)
+            print(f'LOGGING STEP =============================== {self.global_step}')
+            print(step_log)
             locs['train_losses'] = list()
 
 
