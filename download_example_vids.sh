@@ -1,0 +1,2 @@
+# gdown --id 1PU_KlvJNv23FcsXLtkdk41vkam33dVHL -O /home/mcarroll/Documents/cd-2/VideoMimic/src/videomimic/data/demo_video/demos.zip
+unzip /home/mcarroll/Documents/cd-2/VideoMimic/src/videomimic/data/demo_video/demos.zip -d /home/mcarroll/Documents/cd-2/VideoMimic/src/videomimic/data/demo_video/
