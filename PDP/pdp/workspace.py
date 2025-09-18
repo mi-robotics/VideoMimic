@@ -212,17 +212,11 @@ class DiffusionPolicyWorkspace:
             self.__dict__[key].load_state_dict(value, strict=False, **kwargs)
                
 
-    def load_checkpoint(self, path=None, tag='latest', load_optimizer=True, **kwargs):
-            if key == 'optimizer' and not load_optimizer:
-                continue
-                
-            self.__dict__[key].load_state_dict(value, strict=False, **kwargs)
-               
+
 
     def load_checkpoint(self, path=None, tag='latest', load_optimizer=True, **kwargs):
         if path is None:
             path = self.get_checkpoint_path(tag=tag)
-        else:   
         else:   
             path = pathlib.Path(path)
         payload = torch.load(path.open('rb'), pickle_module=dill, **kwargs)

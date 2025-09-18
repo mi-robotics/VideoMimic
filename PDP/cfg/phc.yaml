@@ -49,7 +49,7 @@ optimizer:
 policy: # TODO
     _target_: pdp.policy.DiffusionPolicy
     model:
-        _target_: pdp.modules.TransformerForDiffusion
+        _target_: pdp.modules_v2.QKVTransformerForDiffusion
         obs_type: ref
         causal_attn: True # (needed for the observation)
         past_action_visible: False # <------------------------------------- CHECK
