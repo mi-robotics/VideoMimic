@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation, FFMpegFileWriter
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-import mpl_toolkits.mplot3d.axes3d as p3
 # import cv2
 from textwrap import wrap
 
@@ -59,7 +58,7 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, figsize=(3, 3), fps
 
     fig = plt.figure(figsize=figsize)
     plt.tight_layout()
-    ax = p3.Axes3D(fig)
+    ax = fig.add_subplot(111, projection='3d')
     init()
     MINS = data.min(axis=0).min(axis=0)
     MAXS = data.max(axis=0).max(axis=0)

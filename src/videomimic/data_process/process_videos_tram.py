@@ -87,7 +87,7 @@ def run_tram_camera_estimation(video_path, static_camera=False):
             cmd.append('--static_camera')
             
         logger.info(f"Running camera estimation for {video_path}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(TRAM_ROOT))
+        result = subprocess.run(cmd, cwd=str(TRAM_ROOT))
         
         if result.returncode == 0:
             logger.info(f"Camera estimation completed successfully")
@@ -120,7 +120,7 @@ def run_tram_human_estimation(video_path, max_humans=20):
         ]
         
         logger.info(f"Running human pose estimation for {video_path}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(TRAM_ROOT))
+        result = subprocess.run(cmd, cwd=str(TRAM_ROOT))
         
         if result.returncode == 0:
             logger.info(f"Human pose estimation completed successfully")
@@ -139,37 +139,52 @@ def run_tram_human_estimation(video_path, max_humans=20):
 def organize_tram_outputs(video_name, tram_results_dir, output_dir):
     """
     Organize TRAM outputs into the specified output directory
-    
+
     Args:
         video_name (str): Name of the video (without extension)
         tram_results_dir (str): TRAM results directory
         output_dir (str): Target output directory
-    
+
     Returns:
         bool: True if successful, False otherwise
     """
+
     try:
         # Create video-specific output directory
         video_output_dir = Path(output_dir) / video_name
         video_output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Copy TRAM results
-        tram_seq_folder = Path(tram_results_dir) / video_name
-        
-        if tram_seq_folder.exists():
-            # Copy all files from TRAM results
-            for item in tram_seq_folder.iterdir():
-                if item.is_file():
-                    shutil.copy2(item, video_output_dir)
-                elif item.is_dir():
-                    shutil.copytree(item, video_output_dir / item.name, dirs_exist_ok=True)
-            
-            logger.info(f"Organized outputs for {video_name} to {video_output_dir}")
-            return True
-        else:
-            logger.error(f"TRAM results folder not found: {tram_seq_folder}")
+
+        # Try to find the correct TRAM results folder
+        tram_results_dir = Path(tram_results_dir)
+        # Look for a folder that matches video_name or video_name + "_30fps"
+        candidate_folders = []
+        for folder in tram_results_dir.iterdir():
+            if folder.is_dir() and (folder.name == video_name or folder.name.startswith(video_name + "_30fps")):
+                candidate_folders.append(folder)
+
+        if not candidate_folders:
+            logger.error(f"TRAM results folder not found for: {video_name} (searched in {tram_results_dir})")
             return False
-            
+
+        # Prefer exact match, otherwise use the first candidate
+        tram_seq_folder = None
+        for folder in candidate_folders:
+            if folder.name == video_name:
+                tram_seq_folder = folder
+                break
+        if tram_seq_folder is None:
+            tram_seq_folder = candidate_folders[0]
+
+        # Copy all files from TRAM results
+        for item in tram_seq_folder.iterdir():
+            if item.is_file():
+                shutil.copy2(item, video_output_dir)
+            elif item.is_dir():
+                shutil.copytree(item, video_output_dir / item.name, dirs_exist_ok=True)
+
+        logger.info(f"Organized outputs for {video_name} to {video_output_dir} (from {tram_seq_folder})")
+        return True
+
     except Exception as e:
         logger.error(f"Error organizing outputs: {e}")
         return False

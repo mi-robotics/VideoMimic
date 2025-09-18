@@ -125,6 +125,20 @@ if __name__ == "__main__":
                     torch.from_numpy(pose_quat),
                     root_trans_offset,
                     is_local=True)
+
+        try:
+            import matplotlib.pyplot as plt
+            from poselib.poselib.visualization.common import plot_skeleton_motion_interactive, plot_skeleton_states
+
+            # If you want to visualize the motion, you can pass a list of SkeletonState objects (one per frame)
+            # or just the SkeletonState object if it represents a sequence.
+            # Here, sk_state is a SkeletonState with shape (N, ...), so we can pass it directly.
+            sk_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=30)
+            # plot_skeleton_states(sk_state, skip_n=1, task_name=f"TRAM Track {i:02d} ({seq_name}/{motion_name})")
+            plot_skeleton_motion_interactive(sk_motion)
+        except Exception as e:
+            print(f"[Visualization skipped] {e}")
+        input()
         
         if robot_cfg['upright_start']:
             pose_quat_global = (sRot.from_quat(new_sk_state.global_rotation.reshape(-1, 4).numpy()) * sRot.from_quat([0.5, 0.5, 0.5, 0.5]).inv()).as_quat().reshape(N, -1, 4)  # should fix pose_quat as well here...
@@ -150,7 +164,7 @@ if __name__ == "__main__":
         amass_full_motion_dict[key_name_dump] = new_motion_out
         
     # import ipdb; ipdb.set_trace()
-    if upright_start:
-        joblib.dump(amass_full_motion_dict, "data/amass/amass_train_upright.pkl", compress=True)
-    else:
-        joblib.dump(amass_full_motion_dict, "data/amass/amass_train_take6.pkl", compress=True)
+    # if upright_start:
+    #     joblib.dump(amass_full_motion_dict, "data/amass/amass_train_upright.pkl", compress=True)
+    # else:
+    #     joblib.dump(amass_full_motion_dict, "data/amass/amass_train_take6.pkl", compress=True)

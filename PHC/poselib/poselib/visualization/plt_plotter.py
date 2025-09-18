@@ -12,7 +12,7 @@ dots)
 from typing import Any, Callable, Dict, List
 
 import matplotlib.pyplot as plt
-import mpl_toolkits.mplot3d.axes3d as p3
+from mpl_toolkits.mplot3d import Axes3D
 
 import numpy as np
 
@@ -206,7 +206,7 @@ class Matplotlib2DPlotter(BasePlotter):
 
 class Matplotlib3DPlotter(BasePlotter):
     _fig: plt.figure  # plt figure
-    _ax: p3.Axes3D  # plt 3d axis
+    _ax: Axes3D  # plt 3d axis
     # stores artist objects for each task (task name as the key)
     _artist_cache: Dict[str, Any]
     # callables for each task primitives
@@ -215,7 +215,7 @@ class Matplotlib3DPlotter(BasePlotter):
 
     def __init__(self, task: "BasePlotterTask") -> None:
         self._fig = plt.figure()
-        self._ax = p3.Axes3D(self._fig)
+        self._ax = self._fig.add_subplot(111, projection="3d")
         self._artist_cache = {}
 
         self._create_impl_callables = {

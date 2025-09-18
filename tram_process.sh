@@ -1,0 +1,1 @@
+python3 src/videomimic/data_process/process_videos_tram.py --input_folder /home/mcarroll/Documents/cd-2/VideoMimic/src/videomimic/data/demo_video/video_mimic_demos --output_folder src/videomimic/data/video_mimic_demos/tram

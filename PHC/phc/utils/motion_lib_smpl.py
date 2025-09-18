@@ -71,8 +71,10 @@ class MotionLibSMPL(MotionLibBase):
     
     @staticmethod
     def fix_trans_height(pose_aa, trans, curr_gender_betas, mesh_parsers, fix_height_mode):
+     
         if fix_height_mode == FixHeightMode.no_fix:
             return trans, 0
+
         
         with torch.no_grad():
             frame_check = 30
@@ -128,7 +130,11 @@ class MotionLibSMPL(MotionLibBase):
                 start = random.randint(0, seq_len - max_len)
                 end = start + max_len
 
-            trans = curr_file['root_trans_offset'].clone()[start:end]
+            if isinstance(curr_file['root_trans_offset'], torch.Tensor):
+                trans = curr_file['root_trans_offset'].clone()[start:end]
+            else:
+                trans = to_torch(curr_file['root_trans_offset']).clone()[start:end]
+ 
             pose_aa = to_torch(curr_file['pose_aa'][start:end])
             pose_quat_global = curr_file['pose_quat_global'][start:end]
             
