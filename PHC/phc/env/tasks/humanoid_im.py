@@ -115,8 +115,8 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         self.ref_body_pos_subset = torch.zeros_like(self._rigid_body_pos[:, self._track_bodies_id])
         self.ref_dof_pos = torch.zeros_like(self._dof_pos)
 
-        if self.collect_dataset:
-            self.pdp_obs_buff = torch.zeros((self.num_envs, 357), device=self.device, dtype=torch.float32)
+        # if self.collect_dataset:
+        self.pdp_obs_buff = torch.zeros((self.num_envs, 357), device=self.device, dtype=torch.float32)
 
 
         self.viewer_o3d = flags.render_o3d
@@ -728,8 +728,8 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         else:
             self.obs_buf[env_ids] = obs
 
-        if self.collect_dataset:
-            self.pdp_obs_buff[env_ids] = compute_pdp_obs(self._rigid_body_pos[env_ids], self._rigid_body_rot[env_ids], self._rigid_body_vel[env_ids], self._rigid_body_ang_vel[env_ids])
+       
+        self.pdp_obs_buff[env_ids] = compute_pdp_obs(self._rigid_body_pos[env_ids], self._rigid_body_rot[env_ids], self._rigid_body_vel[env_ids], self._rigid_body_ang_vel[env_ids])
         
         return obs
 
@@ -959,7 +959,7 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         super()._reset_envs(env_ids)
         if self.collect_dataset:
             self.obs_buf_t = self.obs_buf.cpu().numpy() # first time step update
-            self.pdp_obs_buff_t = self.pdp_obs_buff.cpu().numpy()
+        self.pdp_obs_buff_t = self.pdp_obs_buff.cpu().numpy()
 
     def _reset_ref_state_init(self, env_ids):
         self._motion_start_times_offset[env_ids] = 0  # Reset the motion time offsets

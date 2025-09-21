@@ -177,7 +177,7 @@ def create_lora_model_from_checkpoint(
     
     # Load the weights
     if 'model' in payload['state_dicts']:
-        lora_model.lora_model.load_state_dict(payload['state_dicts']['model'], strict=False)
+        lora_model.lora_model.load_state_dict(payload['state_dicts']['model'])
     
     return lora_model
 

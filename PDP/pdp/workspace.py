@@ -144,7 +144,7 @@ class DiffusionPolicyWorkspace:
         return str(path.absolute())
 
     def load_model_for_finetuning(self, payload):
-        missing_keys, unexpected_keys = self.model.load_state_dict(payload['state_dicts']['ema_model'], strict=False)
+        missing_keys, unexpected_keys = self.model.load_state_dict(payload['state_dicts']['ema_model'])
         # Check if there are missing keys (which is expected when loading non-image checkpoint into image model)
         if missing_keys:
             # Check if all missing keys are image encoder related
@@ -175,7 +175,7 @@ class DiffusionPolicyWorkspace:
         print(f"Available checkpoint keys: {list(payload['state_dicts'].keys())}")
         
     def load_model_for_finetuning(self, payload):
-        missing_keys, unexpected_keys = self.model.load_state_dict(payload['state_dicts']['ema_model'], strict=False)
+        missing_keys, unexpected_keys = self.model.load_state_dict(payload['state_dicts']['ema_model'])
         # Check if there are missing keys (which is expected when loading non-image checkpoint into image model)
         if missing_keys:
             # Check if all missing keys are image encoder related
@@ -209,7 +209,7 @@ class DiffusionPolicyWorkspace:
             if key == 'optimizer' and not load_optimizer:
                 continue
                 
-            self.__dict__[key].load_state_dict(value, strict=False, **kwargs)
+            self.__dict__[key].load_state_dict(value, **kwargs)
                
 
 

@@ -76,7 +76,7 @@ class TransformerForDiffusion(nn.Module):
         self.drop = nn.Dropout(p_drop_emb)
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=self.emb_dim,
-            nhead=self.emb_dim,
+            nhead=n_head,
             dim_feedforward=4*self.emb_dim,
             dropout=p_drop_attn,
             activation='gelu',

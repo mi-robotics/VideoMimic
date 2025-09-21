@@ -55,7 +55,7 @@ if __name__ == "__main__":
             file_data = joblib.load(file)
             
             for k, v in file_data.items():
-                if k in ['pdp_obs', "clean_action", "reset", 'motion_lengths']:
+                if k in ['pdp_obs', "clean_action", "reset"]:
                     if isinstance(v, list) and v:
                         chunk = np.concatenate(v)
                     else:

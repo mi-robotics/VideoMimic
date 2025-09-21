@@ -128,14 +128,14 @@ if __name__ == "__main__":
 
         try:
             import matplotlib.pyplot as plt
-            from poselib.poselib.visualization.common import plot_skeleton_motion_interactive, plot_skeleton_states
+            from poselib.poselib.visualization.common import plot_skeleton_motion, plot_skeleton_states
 
             # If you want to visualize the motion, you can pass a list of SkeletonState objects (one per frame)
             # or just the SkeletonState object if it represents a sequence.
             # Here, sk_state is a SkeletonState with shape (N, ...), so we can pass it directly.
             sk_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=30)
             # plot_skeleton_states(sk_state, skip_n=1, task_name=f"TRAM Track {i:02d} ({seq_name}/{motion_name})")
-            plot_skeleton_motion_interactive(sk_motion)
+            plot_skeleton_motion(sk_motion)
         except Exception as e:
             print(f"[Visualization skipped] {e}")
         input()

@@ -183,7 +183,7 @@ class LoraTransformerForDiffusion(nn.Module):
         lora_state_dict = lora_config['lora_state_dict']
         
         # Load only the LoRA parameters
-        missing_keys, unexpected_keys = self.lora_model.load_state_dict(lora_state_dict, strict=False)
+        missing_keys, unexpected_keys = self.lora_model.load_state_dict(lora_state_dict)
         
         if missing_keys:
             print(f"Missing LoRA keys: {missing_keys}")

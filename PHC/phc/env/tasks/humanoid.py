@@ -1664,7 +1664,7 @@ class Humanoid(BaseTask):
 
         return
 
-    def render(self, sync_frame_time=False):
+    def render(self, sync_frame_time=False, i=None):
         if self.viewer or flags.server_mode:
             self._update_camera()
 
