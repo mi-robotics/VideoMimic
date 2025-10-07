@@ -1,224 +1,262 @@
 """
-Utility functions for LoRA model checkpoint handling in the PDP framework.
+Utility functions for LoRA model saving, loading, and manipulation.
+
+This module provides helper functions for working with LoRA models in the PDP framework,
+including checkpoint management, weight merging, and model creation utilities.
 """
 
 import torch
-import os
-from pathlib import Path
-from typing import Dict, Any, Optional, Union
+import dill
+import pathlib
+from typing import Dict, Any, Optional, Union, List
+from omegaconf import OmegaConf
 
 
 def save_lora_checkpoint(
-    model, 
-    path: Union[str, Path], 
-    optimizer=None, 
-    scheduler=None, 
-    epoch: int = 0, 
-    global_step: int = 0,
-    metadata: Optional[Dict[str, Any]] = None
-):
+    model,
+    path: Union[str, pathlib.Path],
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[Any] = None,
+    epoch: Optional[int] = None,
+    global_step: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs
+) -> str:
     """
-    Save a LoRA model checkpoint compatible with the PDP framework.
+    Save a LoRA checkpoint with additional metadata.
     
     Args:
-        model: LoRA model instance (LoraTransformerForDiffusion)
+        model: LoRA model to save
         path: Path to save the checkpoint
         optimizer: Optimizer state (optional)
         scheduler: Learning rate scheduler state (optional)
-        epoch: Current epoch number
-        global_step: Current global step
-        metadata: Additional metadata to save
+        epoch: Current epoch (optional)
+        global_step: Current global step (optional)
+        metadata: Additional metadata to save (optional)
+        **kwargs: Additional arguments
+        
+    Returns:
+        str: Path where checkpoint was saved
     """
-    path = Path(path)
+    path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Create checkpoint payload compatible with PDP framework
+    # Create comprehensive payload
     payload = {
-        'cfg': getattr(model, 'cfg', None),
-        'state_dicts': {},
-        'pickles': {},
-        'epoch': epoch,
-        'global_step': global_step,
-        'metadata': metadata or {}
+        'cfg': kwargs.get('cfg', None),
+        'state_dicts': {
+            'model': model.state_dict(),
+        },
+        'pickles': {
+            'metadata': metadata or {},
+            'epoch': epoch,
+            'global_step': global_step,
+        }
     }
     
-    # Save model state dict
+    # Add LoRA-specific components if available
     if hasattr(model, 'lora_model'):
-        # For LoRA models, save the full model state dict
-        payload['state_dicts']['model'] = model.lora_model.state_dict()
-        payload['state_dicts']['ema_model'] = model.lora_model.state_dict()  # For compatibility
-        
-        # Save LoRA configuration
+        payload['state_dicts']['lora_model'] = model.lora_model.state_dict()
+    if hasattr(model, 'lora_encoder'):
+        payload['state_dicts']['lora_encoder'] = model.lora_encoder.state_dict()
+    
+    # Add optimizer and scheduler if provided
+    if optimizer is not None:
+        payload['state_dicts']['optimizer'] = optimizer.state_dict()
+    if scheduler is not None:
+        payload['state_dicts']['scheduler'] = scheduler.state_dict()
+    
+    # Add LoRA configuration if available
+    if hasattr(model, 'lora_model') and hasattr(model.lora_model, 'peft_config'):
         payload['pickles']['lora_config'] = {
             'lora_r': model.lora_model.peft_config['default'].r,
             'lora_alpha': model.lora_model.peft_config['default'].lora_alpha,
             'lora_dropout': model.lora_model.peft_config['default'].lora_dropout,
             'target_modules': model.lora_model.peft_config['default'].target_modules,
-            'apply_to': getattr(model, 'apply_to', 'both'),
+            'task_type': str(model.lora_model.peft_config['default'].task_type),
         }
-    else:
-        # For regular models
-        payload['state_dicts']['model'] = model.state_dict()
-        payload['state_dicts']['ema_model'] = model.state_dict()
     
-    # Save optimizer state
-    if optimizer is not None:
-        payload['state_dicts']['optimizer'] = optimizer.state_dict()
+    # Add model configuration if available
+    if hasattr(model, 'task'):
+        payload['pickles']['model_config'] = {
+            'task': model.task,
+            'cond_mechanism': getattr(model, 'cond_mechanism', None),
+            'lora_encoder_units': getattr(model, 'lora_encoder_units', None),
+            'apply_to': getattr(model, 'apply_to', None),
+            'target_module_list': getattr(model, 'target_module_list', None),
+        }
     
-    # Save scheduler state
-    if scheduler is not None:
-        payload['state_dicts']['scheduler'] = scheduler.state_dict()
-    
-    # Save checkpoint
-    torch.save(payload, path)
+    torch.save(payload, path.open('wb'), pickle_module=dill)
     print(f"LoRA checkpoint saved to: {path}")
+    return str(path.absolute())
 
 
 def load_lora_checkpoint(
-    path: Union[str, Path], 
-    model=None, 
-    optimizer=None, 
-    scheduler=None,
+    path: Union[str, pathlib.Path],
+    model: Optional[Any] = None,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[Any] = None,
     load_optimizer: bool = True,
     load_scheduler: bool = True,
-    strict: bool = False
-):
+    **kwargs
+) -> Dict[str, Any]:
     """
-    Load a LoRA model checkpoint compatible with the PDP framework.
+    Load a LoRA checkpoint with options.
     
     Args:
-        path: Path to the checkpoint file
-        model: Model instance to load weights into (optional)
-        optimizer: Optimizer instance to load state into (optional)
-        scheduler: Scheduler instance to load state into (optional)
+        path: Path to load the checkpoint from
+        model: Model to load state into (optional)
+        optimizer: Optimizer to load state into (optional)
+        scheduler: Scheduler to load state into (optional)
         load_optimizer: Whether to load optimizer state
         load_scheduler: Whether to load scheduler state
-        strict: Whether to use strict loading
+        **kwargs: Additional arguments
         
     Returns:
-        Dict containing the loaded checkpoint data
+        Dict: Loaded checkpoint payload
     """
-    path = Path(path)
-    payload = torch.load(path, map_location='cpu')
+    path = pathlib.Path(path)
     
-    print(f"Loading LoRA checkpoint from: {path}")
-    print(f"Available keys: {list(payload.get('state_dicts', {}).keys())}")
+    if not path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {path}")
     
-    # Load model state dict
-    if model is not None and 'model' in payload['state_dicts']:
-        if hasattr(model, 'lora_model'):
-            # For LoRA models
-            missing_keys, unexpected_keys = model.lora_model.load_state_dict(
-                payload['state_dicts']['model'], strict=strict
-            )
-        else:
-            # For regular models
-            missing_keys, unexpected_keys = model.load_state_dict(
-                payload['state_dicts']['model'], strict=strict
-            )
+    payload = torch.load(path.open('rb'), pickle_module=dill, **kwargs)
+    
+    # Load model state if model provided
+    if model is not None and 'state_dicts' in payload:
+        if 'model' in payload['state_dicts']:
+            model.load_state_dict(payload['state_dicts']['model'])
         
-        if missing_keys:
-            print(f"Missing keys: {missing_keys}")
-        if unexpected_keys:
-            print(f"Unexpected keys: {unexpected_keys}")
+        # Load LoRA-specific components
+        if hasattr(model, 'lora_model') and 'lora_model' in payload['state_dicts']:
+            model.lora_model.load_state_dict(payload['state_dicts']['lora_model'])
+        if hasattr(model, 'lora_encoder') and 'lora_encoder' in payload['state_dicts']:
+            model.lora_encoder.load_state_dict(payload['state_dicts']['lora_encoder'])
     
-    # Load optimizer state
-    if optimizer is not None and load_optimizer and 'optimizer' in payload['state_dicts']:
+    # Load optimizer state if provided and requested
+    if optimizer is not None and load_optimizer and 'optimizer' in payload.get('state_dicts', {}):
         optimizer.load_state_dict(payload['state_dicts']['optimizer'])
-        print("Optimizer state loaded")
     
-    # Load scheduler state
-    if scheduler is not None and load_scheduler and 'scheduler' in payload['state_dicts']:
+    # Load scheduler state if provided and requested
+    if scheduler is not None and load_scheduler and 'scheduler' in payload.get('state_dicts', {}):
         scheduler.load_state_dict(payload['state_dicts']['scheduler'])
-        print("Scheduler state loaded")
     
+    print(f"LoRA checkpoint loaded from: {path}")
     return payload
 
 
 def create_lora_model_from_checkpoint(
-    checkpoint_path: Union[str, Path],
+    checkpoint_path: Union[str, pathlib.Path],
     base_model_class,
     base_model_kwargs: Dict[str, Any],
-    lora_kwargs: Optional[Dict[str, Any]] = None
+    lora_model_class=None,
+    **kwargs
 ):
     """
-    Create a LoRA model instance from a saved checkpoint.
+    Create a LoRA model instance from a checkpoint.
     
     Args:
-        checkpoint_path: Path to the LoRA checkpoint
-        base_model_class: Class of the base model
-        base_model_kwargs: Arguments for creating the base model
-        lora_kwargs: Additional arguments for LoRA configuration
+        checkpoint_path: Path to the checkpoint
+        base_model_class: Class for the base model
+        base_model_kwargs: Arguments for base model creation
+        lora_model_class: Class for the LoRA model (optional)
+        **kwargs: Additional arguments
         
     Returns:
         LoRA model instance
     """
-    from pdp.lora_model import LoraTransformerForDiffusion
+    path = pathlib.Path(checkpoint_path)
     
-    payload = torch.load(checkpoint_path, map_location='cpu')
+    if not path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {path}")
     
-    # Extract LoRA configuration
+    payload = torch.load(path.open('rb'), pickle_module=dill)
+    
+    # Extract configuration from checkpoint
+    model_config = payload.get('pickles', {}).get('model_config', {})
     lora_config = payload.get('pickles', {}).get('lora_config', {})
+    
+    # Merge configurations
+    config = {**base_model_kwargs, **model_config, **kwargs}
     
     # Create base model
     base_model = base_model_class(**base_model_kwargs)
     
     # Create LoRA model
-    lora_kwargs = lora_kwargs or {}
-    lora_model = LoraTransformerForDiffusion(
+    if lora_model_class is None:
+        # Try to import the LoRA model class
+        from pdp.lora_model import LoraTransformerForDiffusion
+        lora_model_class = LoraTransformerForDiffusion
+    
+    lora_model = lora_model_class(
         base_model=base_model,
-        lora_r=lora_config.get('lora_r', 8),
-        lora_alpha=lora_config.get('lora_alpha', 16),
-        lora_dropout=lora_config.get('lora_dropout', 0.1),
-        target_modules=lora_config.get('target_modules', ['q_proj', 'k_proj', 'out_proj']),
-        apply_to=lora_config.get('apply_to', 'both'),
-        **lora_kwargs
+        **config
     )
     
-    # Load the weights
-    if 'model' in payload['state_dicts']:
-        lora_model.lora_model.load_state_dict(payload['state_dicts']['model'])
+    # Load state dicts
+    if 'state_dicts' in payload:
+        if 'model' in payload['state_dicts']:
+            lora_model.load_state_dict(payload['state_dicts']['model'])
+        if 'lora_model' in payload['state_dicts']:
+            lora_model.lora_model.load_state_dict(payload['state_dicts']['lora_model'])
+        if 'lora_encoder' in payload['state_dicts']:
+            lora_model.lora_encoder.load_state_dict(payload['state_dicts']['lora_encoder'])
     
+    print(f"LoRA model created from checkpoint: {checkpoint_path}")
     return lora_model
 
 
-def merge_lora_weights(model, alpha: float = 1.0):
+def merge_lora_weights(lora_model, alpha: float = 1.0):
     """
-    Merge LoRA weights into the base model weights.
-    This creates a single model without LoRA adapters.
+    Merge LoRA weights into the base model.
     
     Args:
-        model: LoRA model instance
+        lora_model: LoRA model to merge
         alpha: Scaling factor for LoRA weights
         
     Returns:
-        Model with merged weights
+        Base model with merged weights
     """
-    if not hasattr(model, 'lora_model'):
-        raise ValueError("Model must be a LoRA model")
+    # Create a copy of the base model
+    merged_model = lora_model.base_model
     
-    # Use PEFT's built-in merge functionality
-    merged_model = model.lora_model.merge_and_unload()
+    # Get LoRA adapters
+    lora_adapters = lora_model.lora_model
+    
+    # Merge LoRA weights into base model
+    for name, module in merged_model.named_modules():
+        if hasattr(module, 'weight') and hasattr(module, 'bias'):
+            # Find corresponding LoRA adapter
+            lora_name = name.replace('base_model.', '')
+            if lora_name in lora_adapters.named_modules():
+                # Apply LoRA scaling and merge
+                lora_module = dict(lora_adapters.named_modules())[lora_name]
+                if hasattr(lora_module, 'lora_A') and hasattr(lora_module, 'lora_B'):
+                    # LoRA weight = lora_B @ lora_A * scaling
+                    lora_weight = lora_module.lora_B @ lora_module.lora_A * alpha
+                    module.weight.data += lora_weight
+    
+    print(f"LoRA weights merged into base model with alpha={alpha}")
     return merged_model
 
 
-def save_merged_model(model, path: Union[str, Path]):
+def save_merged_model(merged_model, path: Union[str, pathlib.Path]):
     """
-    Save a model with merged LoRA weights (no LoRA adapters).
+    Save a merged model (base model with LoRA weights).
     
     Args:
-        model: Model with merged weights
+        merged_model: Merged model to save
         path: Path to save the model
     """
-    path = Path(path)
+    path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     
-    checkpoint = {
-        'model_state_dict': model.state_dict(),
-        'model_type': 'merged_lora'
+    payload = {
+        'state_dict': merged_model.state_dict(),
+        'model_type': 'merged_lora',
     }
     
-    torch.save(checkpoint, path)
+    torch.save(payload, path.open('wb'), pickle_module=dill)
     print(f"Merged model saved to: {path}")
 
 
@@ -227,18 +265,88 @@ def compare_lora_configs(config1: Dict[str, Any], config2: Dict[str, Any]) -> bo
     Compare two LoRA configurations for compatibility.
     
     Args:
-        config1: First LoRA configuration
-        config2: Second LoRA configuration
+        config1: First configuration
+        config2: Second configuration
         
     Returns:
-        True if configurations are compatible, False otherwise
+        bool: True if configurations are compatible
     """
-    required_keys = ['lora_r', 'lora_alpha', 'lora_dropout', 'target_modules']
+    # Key parameters that must match
+    critical_params = ['lora_r', 'lora_alpha', 'target_modules']
     
-    for key in required_keys:
-        if key not in config1 or key not in config2:
-            return False
-        if config1[key] != config2[key]:
+    for param in critical_params:
+        if config1.get(param) != config2.get(param):
             return False
     
     return True
+
+
+def get_lora_model_info(model) -> Dict[str, Any]:
+    """
+    Get information about a LoRA model.
+    
+    Args:
+        model: LoRA model
+        
+    Returns:
+        Dict: Model information
+    """
+    info = {
+        'model_type': 'lora',
+        'total_parameters': sum(p.numel() for p in model.parameters()),
+        'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
+        'frozen_parameters': sum(p.numel() for p in model.parameters() if not p.requires_grad),
+    }
+    
+    if hasattr(model, 'lora_model') and hasattr(model.lora_model, 'peft_config'):
+        peft_config = model.lora_model.peft_config['default']
+        info['lora_config'] = {
+            'r': peft_config.r,
+            'alpha': peft_config.lora_alpha,
+            'dropout': peft_config.lora_dropout,
+            'target_modules': peft_config.target_modules,
+            'task_type': str(peft_config.task_type),
+        }
+    
+    if hasattr(model, 'task'):
+        info['task'] = model.task
+    if hasattr(model, 'apply_to'):
+        info['apply_to'] = model.apply_to
+    if hasattr(model, 'target_module_list'):
+        info['target_module_list'] = model.target_module_list
+    
+    return info
+
+
+def print_lora_model_summary(model):
+    """
+    Print a summary of the LoRA model.
+    
+    Args:
+        model: LoRA model to summarize
+    """
+    info = get_lora_model_info(model)
+    
+    print("LoRA Model Summary:")
+    print("=" * 50)
+    print(f"Model Type: {info['model_type']}")
+    print(f"Total Parameters: {info['total_parameters']:,}")
+    print(f"Trainable Parameters: {info['trainable_parameters']:,}")
+    print(f"Frozen Parameters: {info['frozen_parameters']:,}")
+    print(f"Trainable Ratio: {info['trainable_parameters'] / info['total_parameters']:.2%}")
+    
+    if 'lora_config' in info:
+        print(f"\nLoRA Configuration:")
+        for key, value in info['lora_config'].items():
+            print(f"  {key}: {value}")
+    
+    if 'task' in info:
+        print(f"\nTask: {info['task']}")
+    if 'apply_to' in info:
+        print(f"Apply To: {info['apply_to']}")
+    if 'target_module_list' in info:
+        print(f"Target Modules: {info['target_module_list']}")
+    
+    print("=" * 50)
+
+

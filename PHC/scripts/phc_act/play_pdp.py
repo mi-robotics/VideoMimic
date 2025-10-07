@@ -18,6 +18,7 @@ if __name__ == "__main__":
     parser.add_argument("--exp_name", type=str, default="phc_kp_mcp_iccv")
     parser.add_argument("--num_runs", type=int, default=10)
     parser.add_argument("--action_noise_std", type=float, default=0.05)
+    parser.add_argument("--pdp_policy_path", type=str, default=None, help="Path to PDP policy checkpoint")
     args = parser.parse_args()
 
 
@@ -55,7 +56,7 @@ if __name__ == "__main__":
                 collect_dataset=False \
                 env.add_action_noise={False}   \
                 env.action_noise_std={0.0} \
-                +env.pdp_policy_path=/home/mcarroll/Documents/cd-2/VideoMimic/PDP/outputs/2025.09.19/16.44.09_pdp_phc/checkpoints/checkpoint_epoch_100.ckpt"
+                +env.pdp_policy_path={args.pdp_policy_path}"
         print(cmd)
         os.system(cmd)
 

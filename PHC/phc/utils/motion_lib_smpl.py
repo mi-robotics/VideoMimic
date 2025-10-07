@@ -20,8 +20,9 @@ from smpl_sim.smpllib.smpl_parser import (
 from scipy.spatial.transform import Rotation as sRot
 import random
 from phc.utils.flags import flags
-from phc.utils.motion_lib_base import MotionLibBase, DeviceCache, compute_motion_dof_vels, FixHeightMode
+from phc.utils.motion_lib_base import MotionLibBase, DeviceCache, compute_motion_dof_vels, FixHeightMode, MotionlibMode
 from smpl_sim.utils.torch_ext import to_torch
+import glob
 
 USE_CACHE = False
 print("MOVING MOTION DATA TO GPU, USING CACHE:", USE_CACHE)
@@ -189,3 +190,95 @@ class MotionLibSMPL(MotionLibBase):
 
     
     
+
+class MotionLibSMPLVidMimic(MotionLibSMPL):
+
+    def __init__(self, motion_lib_cfg, extra_data_path):
+        self.extra_data_path = extra_data_path
+        self.image_emb_mappings = joblib.load(f'{self.extra_data_path}/vidmimic_image_emb_mappings.pkl')
+        super().__init__(motion_lib_cfg = motion_lib_cfg)
+        
+     
+        return
+
+
+    def load_data(self, motion_file,  min_length=-1, im_eval = False):
+        # TODO: remove the exlcude failed keys
+        if osp.isfile(motion_file):
+            self.mode = MotionlibMode.file
+            self._motion_data_load = joblib.load(motion_file)
+        else:
+            self.mode = MotionlibMode.directory
+            self._motion_data_load = glob.glob(osp.join(motion_file, "*.pkl"))
+        
+        data_list = self._motion_data_load
+
+        if self.mode == MotionlibMode.file:
+            if min_length != -1:
+                data_list = {k: v for k, v in list(self._motion_data_load.items()) if len(v['pose_quat_global']) >= min_length}
+            elif im_eval:
+                data_list = {
+                        k: v
+                        for k, v in sorted(
+                            (
+                                (k, v)
+                                for k, v in self._motion_data_load.items()
+                                if isinstance(v, dict)
+                                and 'pose_quat_global' in v
+                                and v['pose_quat_global'] is not None
+                            ),
+                            key=lambda kv: len(kv[1]['pose_quat_global']),
+                            reverse=True,
+                        )
+                    }
+                # data_list = self._motion_data
+            else:
+                data_list = self._motion_data_load
+
+            self._motion_data_list = np.array(list(data_list.values()))
+            self._motion_data_keys = np.array(list(data_list.keys()))
+        else:
+            self._motion_data_list = np.array(self._motion_data_load)
+            self._motion_data_keys = np.array(self._motion_data_load)
+        
+        self._num_unique_motions = len(self._motion_data_list)
+        if self.mode == MotionlibMode.directory:
+            self._motion_data_load = joblib.load(self._motion_data_load[0]) 
+    
+    
+    def get_motion_state(self, motion_ids=None, motion_times=None, offset=None):
+        motion_state = super().get_motion_state(motion_ids, motion_times, offset)
+
+        motion_len = self._motion_lengths[motion_ids]
+        num_frames = self._motion_num_frames[motion_ids]
+        dt = self._motion_dt[motion_ids]
+
+        frame_idx0, frame_idx1, blend = self._calc_frame_blend(motion_times, motion_len, num_frames, dt)
+
+
+        # fro each motion get the t-emb and t+8 emb
+        
+        fetch_keys = self.curr_motion_keys[motion_ids]
+   
+        all_embs = []
+        if len(motion_ids) == 1:
+            fetch_keys = [fetch_keys]
+
+        for i, key in enumerate(fetch_keys):
+
+            start_frame_index = (frame_idx0-1)[i]
+            end_frame_index = torch.min(frame_idx0 + 7, num_frames - 2)[i]
+                        
+            image_emb = self.image_emb_mappings[key]
+
+            t_emb = torch.from_numpy(image_emb[start_frame_index]).to(self._device).unsqueeze(0)
+            t_plus_8_emb = torch.from_numpy(image_emb[end_frame_index]).to(self._device).unsqueeze(0)
+
+            embs = torch.cat((t_emb, t_plus_8_emb), dim=0)
+
+
+            all_embs.append(embs.unsqueeze(0))
+
+        motion_state['image_emb'] = torch.cat(all_embs, dim=0)
+   
+        return motion_state

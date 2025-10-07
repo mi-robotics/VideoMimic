@@ -16,7 +16,7 @@ import h5py
 PROJECT_DIR = pathlib.Path(__file__).resolve().parents[2]
 
 
-@numba.jit(nopython=True)
+# @numba.jit(nopython=True)
 def create_indices(motion_starts, motion_lengths, exclude_ids, sequence_length, pad_before=0, pad_after=0):
     pad_before = min(max(pad_before, 0), sequence_length-1)
     pad_after = min(max(pad_after, 0), sequence_length-1)
@@ -49,18 +49,21 @@ def create_indices(motion_starts, motion_lengths, exclude_ids, sequence_length, 
 
 class DiffusionPolicyDatasetPHC(Dataset):
     def __init__(self, 
-            data_path, horizon=1, pad_before=0, pad_after=0, cache_data=False):
+            data_path, horizon=1, pad_before=0, pad_after=0, cache_data=False, load_keys=['clean_action', 'pdp_obs', 'pdp_ref']):
         self.keys = ['obs', 'action']
         self.meta_keys = ['motion_fname']
         self.horizon = horizon
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.cache_data = cache_data
+        self.load_keys = load_keys
 
 
 
         # zarr_path = os.path.join(PROJECT_DIR, zarr_path)
         meta_data = joblib.load(f'{data_path}/phc_act_amass_train_upright_metadata.pkl')
+        
+        self.meta_data = meta_data
         self.normalizer_path = f'{data_path}/normalizer_params.pt'
         self.h5path =  f'{data_path}/phc_act_amass_train_upright.h5'
         self.h5file = None
@@ -70,22 +73,36 @@ class DiffusionPolicyDatasetPHC(Dataset):
         if self.cache_data:
             print('Loading data into cache ========================')
             with h5py.File(self.h5path, 'r') as h5f:
-                for key in ['clean_action', 'pdp_obs']:
-                    self.cache[key] = h5f[key][()]
+                for key in self.load_keys:
+                    if key in h5f.keys():
+                        print(f'loading ------ {key}')
+                        self.cache[key] = h5f[key][()]
             print('Loading data complete ========================')
+
 
         motion_lengths = np.concatenate( [ml for ml in meta_data['motion_lengths']])
         self.num_motions = len(motion_lengths) - len(meta_data['exclude_ids'])
         motion_starts = np.cumsum(motion_lengths)
         motion_starts = np.insert(motion_starts, 0, 0)
         motion_starts = motion_starts[:-1]
+        self.motion_starts = motion_starts
+        self.motion_lengths = motion_lengths
+        self.exclude_ids = meta_data['exclude_ids']
+
+        # # For debugging: only keep the first 10 motions, add the rest to exclude_ids
+        # if len(motion_lengths) > 10:
+        #     keep_ids = set(range(10))
+        #     all_ids = set(range(len(motion_lengths)))
+        #     extra_exclude = list(all_ids - keep_ids)
+        #     # Combine with existing exclude_ids, ensure uniqueness
+        #     self.exclude_ids = list(set(self.exclude_ids).union(set(extra_exclude)))
 
         self.load_normalizer()
- 
+
         self.indices = create_indices(
             motion_starts,
             motion_lengths,
-            meta_data['exclude_ids'],
+            self.exclude_ids,
             sequence_length=self.horizon, 
             pad_before=pad_before, 
             pad_after=pad_after
@@ -114,6 +131,9 @@ class DiffusionPolicyDatasetPHC(Dataset):
             'obs': sample['pdp_obs'],           # T, D_o
             'action': sample['clean_action'],     # T, D_a
         }
+        if 'pdp_ref' in sample.keys():
+            data['ref'] = sample['pdp_ref']
+
         data = dict_apply(data, torch.from_numpy)
         data = dict_apply(data, lambda x: x.to(torch.float32))
         return data
@@ -134,18 +154,19 @@ class DiffusionPolicyDatasetPHC(Dataset):
                 self.h5file = h5py.File(self.h5path, 'r')
             data_source=self.h5file    
 
-        for key in ['clean_action', 'pdp_obs']:
-            sample = data_source[key][buffer_start_idx:buffer_end_idx]
-            data = sample
-            if (sample_start_idx > 0) or (sample_end_idx < self.horizon):
-                data = np.zeros((self.horizon, *sample.shape[1:]), dtype=sample.dtype)
-                if sample_start_idx > 0:
-                    data[:sample_start_idx] = sample[0]
-                if sample_end_idx < self.horizon:
-                    data[sample_end_idx:] = sample[-1]
-                data[sample_start_idx:sample_end_idx] = sample
+        for key in self.load_keys:
+            if key in data_source.keys():
+                sample = data_source[key][buffer_start_idx:buffer_end_idx]
+                data = sample
+                if (sample_start_idx > 0) or (sample_end_idx < self.horizon):
+                    data = np.zeros((self.horizon, *sample.shape[1:]), dtype=sample.dtype)
+                    if sample_start_idx > 0:
+                        data[:sample_start_idx] = sample[0]
+                    if sample_end_idx < self.horizon:
+                        data[sample_end_idx:] = sample[-1]
+                    data[sample_start_idx:sample_end_idx] = sample
 
-            result[key] = data
+                result[key] = data
 
         return result
 

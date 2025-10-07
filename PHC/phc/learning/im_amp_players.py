@@ -44,6 +44,7 @@ class IMAMPPlayerContinuous(amp_players.AMPPlayerContinuous):
         if humanoid_env.collect_dataset:
             self.obs_buf, self.obs_buf_all = [], []
             self.pdp_obs, self.pdp_obs_all = [], []
+            self.pdp_ref, self.pdp_ref_all = [], []
             self.env_actions, self.actions_all = [], []
             self.motion_length_all = []
             self.clean_actions, self.clean_actions_all = [], []
@@ -96,6 +97,7 @@ class IMAMPPlayerContinuous(amp_players.AMPPlayerContinuous):
             if humanoid_env.collect_dataset:
                 self.obs_buf.append(info['obs_buf'])
                 self.pdp_obs.append(info['pdp_obs'])
+                self.pdp_ref.append(info['pdp_ref'])
                 self.clean_actions.append(info['clean_actions'])
                 self.env_actions.append(info['actions'])
                 self.reset_buf.append(info['reset_buf'])
@@ -142,6 +144,10 @@ class IMAMPPlayerContinuous(amp_players.AMPPlayerContinuous):
                     pdp_obs_buf = [pdp_obs_buf[: (i - 1), idx] for idx, i in enumerate(humanoid_env._motion_lib.get_motion_num_steps())]
                     self.pdp_obs_all += pdp_obs_buf
 
+                    pdp_ref_buf = np.stack(self.pdp_ref)
+                    pdp_ref_buf = [pdp_ref_buf[: (i - 1), idx] for idx, i in enumerate(humanoid_env._motion_lib.get_motion_num_steps())]
+                    self.pdp_ref_all += pdp_ref_buf
+
                     all_clean_actions = np.stack(self.clean_actions) 
                     all_clean_actions = [all_clean_actions[: (i - 1), idx] for idx, i in enumerate(humanoid_env._motion_lib.get_motion_num_steps())]
                     self.clean_actions_all += all_clean_actions
@@ -169,7 +175,9 @@ class IMAMPPlayerContinuous(amp_players.AMPPlayerContinuous):
                     print("Dumping to: ", dump_dir)
                     joblib.dump({
                             "pdp_obs": self.pdp_obs_all, 
+                            "pdp_ref": self.pdp_ref_all,
                             "clean_action": self.clean_actions_all, 
+                            "actions": self.actions_all,
                             "key_names": np.array(self.keys_all),
                             "motion_lengths": np.array(self.motion_length_all),
                             "reset": np.concatenate(self.reset_buf_all), 
@@ -178,6 +186,7 @@ class IMAMPPlayerContinuous(amp_players.AMPPlayerContinuous):
                             }, dump_dir, compress=True)
                     self.obs_buf, self.obs_buf_all = [], []
                     self.pdp_obs, self.pdp_obs_all = [], []
+                    self.pdp_ref, self.pdp_ref_all = [], []
                     self.env_actions, self.actions_all = [], []
                     self.motion_length_all = []
                     self.clean_actions, self.clean_actions_all = [], []

@@ -12,6 +12,10 @@ from collections import deque
 from phc.learning.network_loader import load_mcp_mlp, load_pnn
 from phc.learning.mlp import MLP
 import collections
+from phc.utils.motion_lib_real import MotionLibReal
+from phc.utils.motion_lib_smpl import MotionLibSMPL, MotionLibSMPLVidMimic
+from phc.utils.motion_lib_base import FixHeightMode
+from easydict import EasyDict
 
 def load_pdp_policy(policy_path):
     import dill
@@ -37,11 +41,15 @@ class HumanoidImMCP(humanoid_im.HumanoidIm):
         self.z_activation = cfg["env"].get("z_activation", "relu")
         self.pdp_policy_path = cfg["env"].get("pdp_policy_path", None)
 
-        super().__init__(cfg=cfg, sim_params=sim_params, physics_engine=physics_engine, device_type=device_type, device_id=device_id, headless=headless)
-
-
         if self.pdp_policy_path:
             self.pdp_policy, self.pdp_cfg = load_pdp_policy(self.pdp_policy_path)
+
+
+        super().__init__(cfg=cfg, sim_params=sim_params, physics_engine=physics_engine, device_type=device_type, device_id=device_id, headless=headless)
+
+        if self.pdp_policy_path is not None:
+            self.pdp_action_count = 0
+            self.pdp_actions = None
             pdp_obs = compute_pdp_obs(
                 self._rigid_body_pos[:], 
                 self._rigid_body_rot[:], 
@@ -50,7 +58,8 @@ class HumanoidImMCP(humanoid_im.HumanoidIm):
             ) #[n envs, pdp_obs_size]
   
             self.pdp_hist = pdp_obs.unsqueeze(1).repeat(1, self.pdp_cfg.policy.model.T_obs, 1) 
-    
+            self.pdp_hist_actions = torch.zeros((self.num_envs, self.pdp_cfg.policy.model.T_obs, self._dof_size), device=self.device, dtype=torch.float32)
+           
        
         if self.has_pnn:
             assert (len(self.models_path) == 1)
@@ -71,6 +80,42 @@ class HumanoidImMCP(humanoid_im.HumanoidIm):
         self.fps = deque(maxlen=90)
         
         return
+
+    def _load_motion(self, motion_train_file, motion_test_file=[]):
+
+        if self.pdp_policy_path is not None and self.pdp_cfg.policy.model.task == 'vid_mimic':
+
+            motion_lib_cfg = EasyDict({
+                "motion_file": motion_train_file,
+                "device": torch.device("cpu"),
+                "fix_height": FixHeightMode.full_fix,
+                "min_length": self._min_motion_len,
+                "max_length": -1 if not self.collect_dataset else 1000,
+                "im_eval": flags.im_eval,
+                "multi_thread": not self.cfg.disable_multiprocessing ,
+                "smpl_type": self.humanoid_type,
+                "randomrize_heading": True,
+                "device": self.device,
+                "step_dt": self.dt,
+            })
+            motion_eval_file = motion_train_file
+            self._motion_train_lib = MotionLibSMPLVidMimic(motion_lib_cfg,
+                extra_data_path='/home/mcarroll/Documents/cd-2/VideoMimic/PDP/data/phc_vidmimic_0.05')
+            motion_lib_cfg.im_eval = True
+            self._motion_eval_lib = MotionLibSMPLVidMimic(motion_lib_cfg,
+                extra_data_path='/home/mcarroll/Documents/cd-2/VideoMimic/PDP/data/phc_vidmimic_0.05')
+
+            self._motion_lib = self._motion_train_lib
+            self._motion_lib.load_motions(skeleton_trees=self.skeleton_trees, gender_betas=self.humanoid_shapes.cpu(),
+                                          limb_weights=self.humanoid_limb_and_weights.cpu(), random_sample=(not flags.test) and (not self.seq_motions),
+                                          max_len=-1 if flags.test else self.max_len, start_idx=self.start_idx)
+         
+        else:
+            super()._load_motion(motion_train_file, motion_test_file)
+
+        return
+
+    
 
     def _setup_character_props(self, key_bodies):
         super()._setup_character_props(key_bodies)
@@ -102,13 +147,50 @@ class HumanoidImMCP(humanoid_im.HumanoidIm):
             curr_obs = torch.clamp(curr_obs, min=-5.0, max=5.0)
             
             if self.pdp_policy_path:
-          
+                pdp_freq = 1
                 self.pdp_hist[:, :-1, :] = self.pdp_hist[:, 1:, :]
                 self.pdp_hist[:, -1, :] = self.pdp_obs_buff[:]
-                action_dict = self.pdp_policy.predict_action({
-                    'obs': self.pdp_hist.clone()
-                })
-                actions = action_dict['action'][:, 0, :]
+                self.pdp_hist_actions[:, :-1, :] = self.pdp_hist_actions[:, 1:, :]
+                self.pdp_hist_actions[:, -1, :] = torch.randn_like(self.actions)
+
+                if self.pdp_action_count % pdp_freq == 0:
+                    
+                    if self.pdp_cfg.policy.model.task == 't2m':
+                        action_dict = self.pdp_policy.predict_action(
+                            {
+                                'obs': self.pdp_hist.clone(),
+                                'action': self.pdp_hist_actions.clone()
+                            }, 
+                            **{
+                                'caption': ['A person running.']*self.num_envs
+                            })
+                    elif self.pdp_cfg.policy.model.task == 'ref':
+                        action_dict = self.pdp_policy.predict_action(
+                            {
+                                'obs': self.pdp_hist.clone(),
+                                'action': self.pdp_hist_actions.clone()
+                            }, 
+                            **{
+                                'ref': self.pdp_ref_buff[:]
+                            })
+                    elif self.pdp_cfg.policy.model.task == 'vid_mimic':
+                        action_dict = self.pdp_policy.predict_action(
+                            {
+                                'obs': self.pdp_hist.clone(),
+                                'action': self.pdp_hist_actions.clone()
+                            }, 
+                            **{
+                                'image_emb': self.pdp_image_emb[:]
+                            })
+                  
+                    self.pdp_actions = action_dict['action']
+
+                actions = self.pdp_actions[:, self.pdp_action_count % pdp_freq, :]
+
+                # self.pdp_hist_actions[:, :-1, :] = self.pdp_hist_actions[:, 1:, :]
+                self.pdp_hist_actions[:, -1, :] = actions.clone()
+
+                self.pdp_action_count += 1
             else:
                 if self.discrete_mcp:
                     max_idx = torch.argmax(weights, dim=1)

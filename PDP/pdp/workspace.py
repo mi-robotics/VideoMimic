@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from einops import rearrange, reduce
 from functools import partial
 from tqdm import tqdm
+import gc
 
 from pdp.policy import DiffusionPolicy
 from pdp.dataset.dataset import DiffusionPolicyDataset
@@ -23,6 +24,8 @@ from pdp.utils.common import get_scheduler
 from pdp.utils.data import dict_apply
 from pdp.utils.ema_model import EMAModel
 
+from pdp.policy import MetaDiffusionPolicy
+from collections import defaultdict
 # from accelerate import Accelerator, DistributedDataParallelKwargs
 # from accelerate.state import AcceleratorState
 
@@ -75,13 +78,9 @@ class DiffusionPolicyWorkspace:
         self.global_step = 0
         self.epoch = 0
 
-        if cfg.training.get('is_finetune', False) and cfg.training.get('ckpt_path', None) is not None:
-            # For fine-tuning, load the EMA model as the base model (best pre-trained version)
-            payload = torch.load(cfg.training.ckpt_path, pickle_module=dill)
-            self.load_model_for_finetuning(payload)
-            print("Fine-tuning: Loaded EMA model as base model, created fresh EMA for fine-tuning")
-            # Freeze non-image encoder parameters for fine-tuning
-            self.freeze_non_image_params()
+        if isinstance(self.model, MetaDiffusionPolicy):
+            kld_weight = cfg.dataloader.batch_size / len(dataset)
+            self.model.set_kld_weight(kld_weight)
 
 
     @property
@@ -143,64 +142,7 @@ class DiffusionPolicyWorkspace:
 
         return str(path.absolute())
 
-    def load_model_for_finetuning(self, payload):
-        missing_keys, unexpected_keys = self.model.load_state_dict(payload['state_dicts']['ema_model'])
-        # Check if there are missing keys (which is expected when loading non-image checkpoint into image model)
-        if missing_keys:
-            # Check if all missing keys are image encoder related
-            image_encoder_patterns = ['image_encoder', 'film']
-            non_image_keys = [key_name for key_name in missing_keys 
-                            if not any(pattern in key_name for pattern in image_encoder_patterns)]
-            
-            if non_image_keys:
-                print(f"ERROR: Missing non-image encoder parameters: {non_image_keys}")
-                print(f"All missing parameters: {missing_keys}")
-                raise RuntimeError(f"Unexpected missing parameters found: {non_image_keys}")
-            else:
-                print(f"INFO: All missing parameters are image encoder related: {missing_keys}")
-                print("This is expected when loading a non-image checkpoint into an image-conditioned model.")
 
-        # Check for unexpected keys (parameters in checkpoint that don't exist in current model)
-        if unexpected_keys:
-            print(f"Unexpected keys: {unexpected_keys}")
-            print("These parameters from the checkpoint were ignored.")
-            raise RuntimeError(f'Unexpected keys in checkpoint {unexpected_keys}')
-            
-        self.ema_model = copy.deepcopy(self.model)
-        self.ema_model.set_normalizer(self.model.normalizer)
-        self.ema_model.to(self.device)
-        self.freeze_non_image_params()
-
-    def load_payload(self, payload, load_optimizer=True, **kwargs):       
-        print(f"Available checkpoint keys: {list(payload['state_dicts'].keys())}")
-        
-    def load_model_for_finetuning(self, payload):
-        missing_keys, unexpected_keys = self.model.load_state_dict(payload['state_dicts']['ema_model'])
-        # Check if there are missing keys (which is expected when loading non-image checkpoint into image model)
-        if missing_keys:
-            # Check if all missing keys are image encoder related
-            image_encoder_patterns = ['image_encoder', 'film']
-            non_image_keys = [key_name for key_name in missing_keys 
-                            if not any(pattern in key_name for pattern in image_encoder_patterns)]
-            
-            if non_image_keys:
-                print(f"ERROR: Missing non-image encoder parameters: {non_image_keys}")
-                print(f"All missing parameters: {missing_keys}")
-                raise RuntimeError(f"Unexpected missing parameters found: {non_image_keys}")
-            else:
-                print(f"INFO: All missing parameters are image encoder related: {missing_keys}")
-                print("This is expected when loading a non-image checkpoint into an image-conditioned model.")
-
-        # Check for unexpected keys (parameters in checkpoint that don't exist in current model)
-        if unexpected_keys:
-            print(f"Unexpected keys: {unexpected_keys}")
-            print("These parameters from the checkpoint were ignored.")
-            raise RuntimeError(f'Unexpected keys in checkpoint {unexpected_keys}')
-            
-        self.ema_model = copy.deepcopy(self.model)
-        self.ema_model.set_normalizer(self.model.normalizer)
-        self.ema_model.to(self.device)
-        self.freeze_non_image_params()
 
     def load_payload(self, payload, load_optimizer=True, **kwargs):       
         print(f"Available checkpoint keys: {list(payload['state_dicts'].keys())}")
@@ -212,8 +154,6 @@ class DiffusionPolicyWorkspace:
             self.__dict__[key].load_state_dict(value, **kwargs)
                
 
-
-
     def load_checkpoint(self, path=None, tag='latest', load_optimizer=True, **kwargs):
         if path is None:
             path = self.get_checkpoint_path(tag=tag)
@@ -221,62 +161,9 @@ class DiffusionPolicyWorkspace:
             path = pathlib.Path(path)
         payload = torch.load(path.open('rb'), pickle_module=dill, **kwargs)
         self.load_payload(payload, load_optimizer=load_optimizer)
-        self.load_payload(payload, load_optimizer=load_optimizer)
+
         return payload
 
-    def freeze_non_image_params(self):
-        """Freeze all parameters except image encoder related ones for fine-tuning"""
-        if not self.model.use_image_conds:
-            print("Warning: Model doesn't use image conditions, nothing to freeze")
-            return
-        
-        frozen_count = 0
-        trainable_count = 0
-        
-        for name, param in self.model.named_parameters():
-            is_image_param = any(pattern in name for pattern in ['image_encoder', 'film'])
-            
-            if is_image_param:
-                param.requires_grad = True
-                trainable_count += 1
-            else:
-                param.requires_grad = False
-                frozen_count += 1
-        
-        print(f"Frozen {frozen_count} non-image encoder parameters")
-        print(f"Trainable parameters: {trainable_count}")
-        
-        # Recreate optimizer with only trainable parameters
-        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        self.optimizer = torch.optim.AdamW(trainable_params, **self.cfg.optimizer)
-        print(f"Recreated optimizer with {len(trainable_params)} trainable parameters")
-
-    def freeze_non_image_params(self):
-        """Freeze all parameters except image encoder related ones for fine-tuning"""
-        if not self.model.use_image_conds:
-            print("Warning: Model doesn't use image conditions, nothing to freeze")
-            return
-        
-        frozen_count = 0
-        trainable_count = 0
-        
-        for name, param in self.model.named_parameters():
-            is_image_param = any(pattern in name for pattern in ['image_encoder', 'film'])
-            
-            if is_image_param:
-                param.requires_grad = True
-                trainable_count += 1
-            else:
-                param.requires_grad = False
-                frozen_count += 1
-        
-        print(f"Frozen {frozen_count} non-image encoder parameters")
-        print(f"Trainable parameters: {trainable_count}")
-        
-        # Recreate optimizer with only trainable parameters
-        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        self.optimizer = torch.optim.AdamW(trainable_params, **self.cfg.optimizer)
-        print(f"Recreated optimizer with {len(trainable_params)} trainable parameters")
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -322,7 +209,8 @@ class DiffusionPolicyWorkspace:
             cfg.training.save_checkpoint_every = 1
 
         # self.accelerator.wait_for_everyone()
-        train_losses = list()
+    
+        loss_dict_all = defaultdict(list)
         for local_epoch_idx in range(cfg.training.num_epochs):
             print(f'STARTING EPOCH =============================== {local_epoch_idx}')
             for batch_idx, batch in enumerate(load_loop(self.train_dataloader)):
@@ -330,7 +218,7 @@ class DiffusionPolicyWorkspace:
            
                 batch = dict_apply(batch, lambda x: x.to(self.device))
            
-                loss = self.model(batch)
+                loss, loss_dict = self.model(batch)
                 # self.accelerator.backward(loss)
 
                 self.optimizer.zero_grad()
@@ -342,7 +230,11 @@ class DiffusionPolicyWorkspace:
 
                 # if self.accelerator.is_main_process:
                 loss_cpu = loss.item()
-                train_losses.append(loss_cpu)
+
+                loss_dict_all['loss'].append(loss_cpu)
+                for k, v in loss_dict.items():
+                    loss_dict_all[k].append(v)
+          
                 step_log = {
                     'train_loss': loss_cpu,
                     # 'global_step': self.global_step,
@@ -354,8 +246,23 @@ class DiffusionPolicyWorkspace:
                     self.log_step(locals())
 
                 self.global_step += 1
+                
+                # Clear CUDA cache less frequently to avoid performance impact
+                if self.global_step % 500 == 0:
+                    torch.cuda.empty_cache()
+                    
+                    gc.collect()
+                    
+                # Log memory usage less frequently to avoid I/O overhead
+                if self.global_step % 1000 == 0:
+                    if torch.cuda.is_available():
+                        memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
+                        memory_reserved = torch.cuda.memory_reserved(self.device) / 1024**3  # GB
+                        print(f"Step {self.global_step}: GPU Memory - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB")
 
             self.epoch += 1
+            # Clear memory at end of each epoch
+            torch.cuda.empty_cache()
             self.post_step(locals())
 
     def log_step(self, locs):
@@ -363,11 +270,13 @@ class DiffusionPolicyWorkspace:
         if cfg.training.logging:
             wandb_run = locs['wandb_run']
             step_log = locs['step_log']
-            step_log['train_loss'] = np.mean(locs['train_losses'])
+            for k, v in locs['loss_dict_all'].items():
+                step_log[k] = np.mean(v)
+   
             wandb_run.log(step_log, step=self.global_step)
             print(f'LOGGING STEP =============================== {self.global_step}')
             print(step_log)
-            locs['train_losses'] = list()
+            locs['loss_dict_all'] = defaultdict(list)
 
 
     def post_step(self, locs):

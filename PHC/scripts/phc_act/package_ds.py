@@ -41,21 +41,21 @@ if __name__ == "__main__":
 
     print("Done")
     # Aggregating the dataset into one file
-    pkl_files = glob.glob(f"output/HumanoidIm/{exp_name}/phc_act/{motion_file_name}/*.pkl")
+    pkl_files = glob.glob(f"output/HumanoidIm/{exp_name}/phc_act/amass_train_upright_run_jump_forward_backward/*.pkl")
 
     # Use a defaultdict(list) to ensure all values are lists
     metadata_dump = defaultdict(list)
     hdf5_datasets = {} # Dictionary to hold h5py dataset objects
 
     # Open the HDF5 file once and keep it open for appending
-    with h5py.File(f'output/HumanoidIm/{exp_name}/phc_act/phc_act_{motion_file_name}.h5', 'w') as hdf5_file:
+    with h5py.File(f'output/HumanoidIm/{exp_name}/phc_act/phc_act_{motion_file_name}_run_jump_forward_backward.h5', 'w') as hdf5_file:
         
         # Process the files one by one
         for i, file in enumerate(tqdm(pkl_files)):
             file_data = joblib.load(file)
-            
+
             for k, v in file_data.items():
-                if k in ['pdp_obs', "clean_action", "reset"]:
+                if k in ['pdp_obs', "clean_action", "actions", "reset", "pdp_ref"]:
                     if isinstance(v, list) and v:
                         chunk = np.concatenate(v)
                     else:
@@ -67,6 +67,7 @@ if __name__ == "__main__":
                             k, data=chunk, maxshape=(None,) + chunk.shape[1:], 
                             compression="gzip", compression_opts=9
                         )
+                        print(f"Creating dataset {k} with shape {chunk.shape}")
                     else:
                         # Resize and append for subsequent files
                         dataset = hdf5_datasets[k]
@@ -86,7 +87,7 @@ if __name__ == "__main__":
             metadata_dump[key] = value[-1] # or np.mean(value, axis=0)
         # Add other aggregation logic here for other metadata keys
         
-    joblib.dump(metadata_dump, f'output/HumanoidIm/{exp_name}/phc_act/phc_act_{motion_file_name}_metadata.pkl', compress=True)
+    joblib.dump(metadata_dump, f'output/HumanoidIm/{exp_name}/phc_act/phc_act_{motion_file_name}_run_jump_forward_backward_metadata.pkl', compress=True)
 
     print("Dataset successfully written to HDF5 file, no longer dumping to a single .pkl")
 

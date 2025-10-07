@@ -117,6 +117,8 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
 
         # if self.collect_dataset:
         self.pdp_obs_buff = torch.zeros((self.num_envs, 357), device=self.device, dtype=torch.float32)
+        self.pdp_ref_buff = torch.zeros((self.num_envs, 438), device=self.device, dtype=torch.float32)
+        self.pdp_image_emb = torch.zeros((self.num_envs, 2, 768), device=self.device, dtype=torch.float32)
 
 
         self.viewer_o3d = flags.render_o3d
@@ -686,12 +688,14 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
             #### Dumping dataset
             if self.collect_dataset:
                 self.extras['pdp_obs'] = self.pdp_obs_buff_t.copy()
+                self.extras['pdp_ref'] = self.pdp_ref_buff_t.copy()
                 self.extras['obs_buf'] = self.obs_buf_t.copy()  # n, 945
                 self.extras['actions'] = self.actions.cpu().numpy()  # n, 69
                 self.extras['clean_actions'] = self.clean_actions.cpu().numpy()
                 self.extras['reset_buf'] = self.reset_buf.cpu().numpy()  # n
 
                 self.pdp_obs_buff_t = self.pdp_obs_buff.cpu().numpy()        
+                self.pdp_ref_buff_t = self.pdp_ref_buff.cpu().numpy()        
                 self.obs_buf_t = self.obs_buf.cpu().numpy() # update to next time step
 
         return
@@ -730,7 +734,65 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
 
        
         self.pdp_obs_buff[env_ids] = compute_pdp_obs(self._rigid_body_pos[env_ids], self._rigid_body_rot[env_ids], self._rigid_body_vel[env_ids], self._rigid_body_ang_vel[env_ids])
+        self.pdp_ref_buff[env_ids] = self._compute_pdp_task_obs(env_ids)
+   
+        return obs
+
+    def _compute_pdp_task_obs(self, env_ids=None):
+        if (env_ids is None):
+            body_pos = self._rigid_body_pos
+            body_rot = self._rigid_body_rot
+            body_vel = self._rigid_body_vel
+            body_ang_vel = self._rigid_body_ang_vel
+            env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+        else:
+            body_pos = self._rigid_body_pos[env_ids]
+            body_rot = self._rigid_body_rot[env_ids]
+            body_vel = self._rigid_body_vel[env_ids]
+            body_ang_vel = self._rigid_body_ang_vel[env_ids]
+
+        curr_gender_betas = self.humanoid_shapes[env_ids]
+    
+        if self._fut_tracks:
+            time_steps = self._num_traj_samples
+            B = env_ids.shape[0]
+            time_internals = torch.arange(time_steps).to(self.device).repeat(B).view(-1, time_steps) * self._traj_sample_timestep
+            motion_times_steps = ((self.progress_buf[env_ids, None] + 1) * self.dt + time_internals + self._motion_start_times[env_ids, None] + self._motion_start_times_offset[env_ids, None]).flatten()  # Next frame, so +1
+            env_ids_steps = self._sampled_motion_ids[env_ids].repeat_interleave(time_steps)
+            motion_res = self._get_state_from_motionlib_cache(env_ids_steps, motion_times_steps, self._global_offset[env_ids].repeat_interleave(time_steps, dim=0).view(-1, 3))  # pass in the env_ids such that the motion is in synced.
+
+        else:
+            motion_times = (self.progress_buf[env_ids] + 1) * self.dt + self._motion_start_times[env_ids] + self._motion_start_times_offset[env_ids]  # Next frame, so +1
+            time_steps = 1
+            motion_res = self._get_state_from_motionlib_cache(self._sampled_motion_ids[env_ids], motion_times, self._global_offset[env_ids])  # pass in the env_ids such that the motion is in synced.
+
+        ref_root_pos, ref_root_rot, ref_dof_pos, ref_root_vel, ref_root_ang_vel, ref_dof_vel, ref_smpl_params, ref_limb_weights, ref_pose_aa, ref_rb_pos, ref_rb_rot, ref_body_vel, ref_body_ang_vel = \
+                motion_res["root_pos"], motion_res["root_rot"], motion_res["dof_pos"], motion_res["root_vel"], motion_res["root_ang_vel"], motion_res["dof_vel"], \
+                motion_res["motion_bodies"], motion_res["motion_limb_weights"], motion_res["motion_aa"], motion_res["rg_pos"], motion_res["rb_rot"], motion_res["body_vel"], motion_res["body_ang_vel"]
         
+        if 'image_emb' in motion_res:
+     
+            self.pdp_image_emb[env_ids] = motion_res['image_emb']
+        
+        root_pos = body_pos[..., 0, :]
+        root_rot = body_rot[..., 0, :]
+
+        body_pos_subset = body_pos[..., self._track_bodies_id, :]
+        body_rot_subset = body_rot[..., self._track_bodies_id, :]
+        body_vel_subset = body_vel[..., self._track_bodies_id, :]
+        body_ang_vel_subset = body_ang_vel[..., self._track_bodies_id, :]
+
+        ref_rb_pos_subset = ref_rb_pos[..., self._track_bodies_id, :]
+        ref_rb_rot_subset = ref_rb_rot[..., self._track_bodies_id, :]
+        ref_body_vel_subset = ref_body_vel[..., self._track_bodies_id, :]
+        ref_body_ang_vel_subset = ref_body_ang_vel[..., self._track_bodies_id, :]
+
+        # elif self.obs_v == 9:
+        ref_root_vel_subset = ref_body_vel_subset[:, 0]
+        ref_root_ang_vel_subset =ref_body_ang_vel_subset[:, 0]
+        obs = compute_imitation_observations_v9(root_pos, root_rot, body_pos_subset, body_rot_subset, body_vel_subset, body_ang_vel_subset, ref_rb_pos_subset, ref_rb_rot_subset, ref_root_vel_subset, ref_root_ang_vel_subset, time_steps, self._has_upright_start)
+            
+     
         return obs
 
     def _compute_task_obs(self, env_ids=None, save_buffer = True):
@@ -960,6 +1022,7 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         if self.collect_dataset:
             self.obs_buf_t = self.obs_buf.cpu().numpy() # first time step update
         self.pdp_obs_buff_t = self.pdp_obs_buff.cpu().numpy()
+        self.pdp_ref_buff_t = self.pdp_ref_buff.cpu().numpy()
 
     def _reset_ref_state_init(self, env_ids):
         self._motion_start_times_offset[env_ids] = 0  # Reset the motion time offsets
