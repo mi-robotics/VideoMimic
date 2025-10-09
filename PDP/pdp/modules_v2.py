@@ -272,10 +272,17 @@ class TransformerEncoder(nn.Module):
             Block(hidden_size, num_heads, mlp_ratio=mlp_ratio, layer_id=i) for i in range(layers)
         ])
     
-    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_extras: bool = False, **kwargs) -> torch.Tensor:
+        layer_embeddings = []
         for blk in self.blocks:
             x = blk(x, None, **kwargs)
-        return x
+            layer_embeddings.append(x)
+
+        if return_extras:
+            return x, {'layer_embeddings': layer_embeddings}
+        else:
+            return x
+    
 
 class TransformerDecoder(nn.Module):
     """Simple transformer decoder backbone with optional causal self-attention."""
@@ -315,6 +322,24 @@ class TransformerDecoder(nn.Module):
             x = blk(x, memory, self_attn_mask=tgt_mask, cross_attn_mask=memory_mask, **kwargs)
         return x
     
+
+
+class ResidualMLP(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.in_proj = nn.Linear(in_dim, out_dim) if in_dim != out_dim else nn.Identity()
+        self.pre_ln  = nn.LayerNorm(in_dim)
+        self.ff = nn.Sequential(
+            nn.Linear(in_dim, out_dim),
+            nn.SiLU(),
+            nn.Linear(out_dim, out_dim),
+        )
+        # small residual gate helps stability
+        self.res_scale = nn.Parameter(torch.tensor(0.1))
+        
+    def forward(self, x):
+        # x: (..., in_dim)
+        return self.in_proj(x) + self.res_scale * self.ff(self.pre_ln(x))
 
 
 

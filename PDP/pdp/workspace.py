@@ -26,8 +26,28 @@ from pdp.utils.ema_model import EMAModel
 
 from pdp.policy import MetaDiffusionPolicy
 from collections import defaultdict
+import torch.nn.functional as F
 # from accelerate import Accelerator, DistributedDataParallelKwargs
 # from accelerate.state import AcceleratorState
+
+from torch.nn.utils import clip_grad_norm_
+
+def global_grad_norm(parameters) -> float:
+    """L2 norm of all gradients."""
+    total_sq = 0.0
+    for p in parameters:
+        if p.grad is not None:
+            g = p.grad.detach()
+            total_sq += float(torch.sum(g*g))
+    return float(total_sq ** 0.5)
+
+def global_param_norm(parameters) -> float:
+    """L2 norm of all parameters."""
+    total_sq = 0.0
+    for p in parameters:
+        d = p.detach()
+        total_sq += float(torch.sum(d*d))
+    return float(total_sq ** 0.5)
 
 
 class DiffusionPolicyWorkspace:
@@ -223,6 +243,16 @@ class DiffusionPolicyWorkspace:
 
                 self.optimizer.zero_grad()
                 loss.backward()
+
+                grad_norm_before = global_grad_norm(self.model.parameters())
+                param_norm_now   = global_param_norm(self.model.parameters())
+
+                # aggregate gradient clipping (global)
+                total_norm_pre = clip_grad_norm_(self.model.parameters(), max_norm=cfg.training.max_grad_norm)
+
+                # (optional) recompute grad norm after clipping
+                grad_norm_after = global_grad_norm(self.model.parameters())
+                
                 self.optimizer.step()
                 lr_scheduler.step()
                 if cfg.training.use_ema:
@@ -234,6 +264,11 @@ class DiffusionPolicyWorkspace:
                 loss_dict_all['loss'].append(loss_cpu)
                 for k, v in loss_dict.items():
                     loss_dict_all[k].append(v)
+
+                loss_dict['grad_norm_before'].append(grad_norm_before)  
+                loss_dict['param_norm_now'].append(param_norm_now)
+                loss_dict['total_norm_pre'].append(total_norm_pre)
+                loss_dict['grad_norm_after'].append(grad_norm_after)
           
                 step_log = {
                     'train_loss': loss_cpu,
@@ -261,9 +296,15 @@ class DiffusionPolicyWorkspace:
                         print(f"Step {self.global_step}: GPU Memory - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB")
 
             self.epoch += 1
+
+            if self.epoch % cfg.training.val_every == 0:
+                self.validate(wandb_run)
             # Clear memory at end of each epoch
             torch.cuda.empty_cache()
             self.post_step(locals())
+
+    def validate(self, wand_run):
+        return 
 
     def log_step(self, locs):
         cfg = locs['cfg']
@@ -294,3 +335,47 @@ class DiffusionPolicyWorkspace:
             self.epoch == cfg.training.num_epochs
         ):
             self.save_checkpoint(tag=f'checkpoint_epoch_{self.epoch}')
+
+
+
+class WorldModelWorkspace(DiffusionPolicyWorkspace):
+    def __init__(self, cfg: OmegaConf):
+        super().__init__(cfg)
+        val_dataset = hydra.utils.instantiate(cfg.dataset)
+        self.val_dataloader = DataLoader(val_dataset, **cfg.dataloader)
+        assert val_dataset.horizon >= self.model.T_range
+        
+
+
+    def validate(self, wandb_run):
+        self.model.eval()
+        cfg = copy.deepcopy(self.cfg)
+
+        load_loop = partial(tqdm, position=1, desc=f"Batch", leave=False, mininterval=cfg.training.tqdm_interval_sec)
+        
+        loss_dict_all = defaultdict(list)
+
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(load_loop(self.val_dataloader)):
+                batch = dict_apply(batch, lambda x: x.to(self.device))
+            
+                obs_preds = self.model.rollout_prediction(batch)
+                
+                mse = F.mse_loss(obs_preds, batch['obs'][:, 1:])
+                mse_middle = F.mse_loss(obs_preds[:, int(self.model.T_range/2):], batch['obs'][:, int(self.model.T_range/2)+1:])
+                mse_last = F.mse_loss(obs_preds[:, -1:], batch['obs'][:, -1:])
+
+                loss_dict_all['mse'].append(mse.item())
+                loss_dict_all['mse_middle'].append(mse_middle.item())
+                loss_dict_all['mse_last'].append(mse_last.item())
+
+        if cfg.training.logging:
+            log = {}
+            for k, v in loss_dict_all.items():
+                log['val/' + k] = np.mean(v)
+                print(f'VAL {k} =============================== {np.mean(v)}')
+   
+            wandb_run.log(log, step=self.global_step)
+   
+
+        self.model.train()
