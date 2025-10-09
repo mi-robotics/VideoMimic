@@ -6,6 +6,8 @@ from torch.nn import functional as F
 import math
 from einops.layers.torch import Rearrange
 import logging
+from pdp.utils.attn import create_causal_attention_mask
+
 logger = logging.getLogger(__name__)
 
 def modulate(x, shift, scale):
@@ -971,8 +973,18 @@ class QKVMetaDiffusion(nn.Module):
             if self.condition_mechanism == 'cat' and self.learn_latent:
                 decoder_size += 1
 
+
+
             if self.causal_attn_type == 'cloc':
-                pass
+                ordering = torch.zeros(decoder_size,dtype=torch.bool)
+                ordering[0::2] = 1 #state first in the ordering
+                m = create_causal_attention_mask(ordering, prefix_full_attention=False)
+                self.register_buffer("mask", m)
+            elif self.causal_attn_type == 'cloc+':
+                ordering = torch.zeros(decoder_size,dtype=torch.bool)
+                ordering[0::2] = 1 #state first in the ordering
+                m = create_causal_attention_mask(ordering, prefix_full_attention=False, action_attend_next_state=True)
+                self.register_buffer("mask", m)
             elif self.causal_attn_type == 'default':
                 mask = (torch.triu(torch.ones(decoder_size, decoder_size)) == 1).transpose(0, 1)
                 mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
