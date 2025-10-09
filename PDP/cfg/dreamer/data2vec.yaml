@@ -63,13 +63,16 @@ policy:
     sequence_encoder_config:
         state_dim: 357
         action_dim: 69
-        hidden_size: 128
+        hidden_size: ${policy.hidden_size}
 
     num_layers: 8
     num_heads: 6
     mlp_ratio: 2
     hidden_size: 512
     regressor_size: "sm"
+    proj_drop: 0
+    attn_drop: 0
+    representation_drop: 0
 
     mask_prob_start: 0.48
     mask_prob_end: 0.48

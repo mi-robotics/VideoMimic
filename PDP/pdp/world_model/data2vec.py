@@ -87,7 +87,11 @@ class Data2Vec(nn.Module):
             hidden_size=config.hidden_size,
             num_heads=config.num_heads,
             mlp_ratio=config.mlp_ratio,
-            layers=config.num_layers
+            layers=config.num_layers,
+            **{
+                'proj_drop': config.proj_drop,
+                'attn_drop': config.attn_drop,
+            }
         )
         self._build_regressor(config.regressor_size)
 
@@ -111,21 +115,26 @@ class Data2Vec(nn.Module):
         assert size in ['sm', 'md', 'bg']
 
         if size == 'sm':
-            self.regressor = nn.Linear(self.hidden_size, self.hidden_size)
+            self.regressor = nn.Sequential(
+                nn.Linear(self.hidden_size, self.hidden_size),
+                nn.Dropout(self.config.representation_drop)
+            )
         elif size == 'md':
             self.regressor = nn.Sequential(
-                                    nn.Linear(self.hidden_size, self.hidden_size * 2),
-                                    nn.GELU(),
-                                    nn.Linear(self.hidden_size * 2, self.hidden_size)
-                            )
+                    nn.Linear(self.hidden_size, self.hidden_size * 2),
+                    nn.GELU(),
+                    nn.Linear(self.hidden_size * 2, self.hidden_size),
+                    nn.Dropout(self.config.representation_drop)
+            )
         elif size == 'bg':
             self.regressor = nn.Sequential(
-                                    nn.Linear(self.hidden_size, self.hidden_size * 2),
-                                    nn.GELU(),
-                                    nn.Linear(self.hidden_size * 2, self.hidden_size*2),
-                                    nn.GELU(),
-                                    nn.Linear(self.hidden_size * 2, self.hidden_size)
-                            )
+                    nn.Linear(self.hidden_size, self.hidden_size * 2),
+                    nn.GELU(),
+                    nn.Linear(self.hidden_size * 2, self.hidden_size*2),
+                    nn.GELU(),
+                    nn.Linear(self.hidden_size * 2, self.hidden_size),
+                    nn.Dropout(self.config.representation_drop)
+            )
 
     def get_optim_groups(self, weight_decay):
  

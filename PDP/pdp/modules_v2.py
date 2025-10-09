@@ -264,12 +264,13 @@ class TransformerEncoder(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         layers=4,
+        **block_kwargs
     ):
         super().__init__()
         self.num_heads = num_heads
 
         self.blocks = nn.ModuleList([
-            Block(hidden_size, num_heads, mlp_ratio=mlp_ratio, layer_id=i) for i in range(layers)
+            Block(hidden_size, num_heads, mlp_ratio=mlp_ratio, layer_id=i, **block_kwargs) for i in range(layers)
         ])
     
     def forward(self, x: torch.Tensor, return_extras: bool = False, **kwargs) -> torch.Tensor:
@@ -294,13 +295,14 @@ class TransformerDecoder(nn.Module):
         mlp_ratio=4.0,
         layers=4,
         causal: bool = False,
+        **block_kwargs
     ):
         super().__init__()
         self.num_heads = num_heads
         self.causal = causal
      
         self.blocks = nn.ModuleList([
-            DecoderBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, layer_id=i) for i in range(layers)
+            DecoderBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, layer_id=i, **block_kwargs) for i in range(layers)
         ])
 
     def _build_causal_mask(self, T: int, device: torch.device) -> torch.Tensor:
