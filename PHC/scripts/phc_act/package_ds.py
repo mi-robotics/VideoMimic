@@ -41,14 +41,14 @@ if __name__ == "__main__":
 
     print("Done")
     # Aggregating the dataset into one file
-    pkl_files = glob.glob(f"output/HumanoidIm/{exp_name}/phc_act/amass_train_upright_run_jump_forward_backward/*.pkl")
+    pkl_files = glob.glob(f"output/HumanoidIm/{exp_name}/phc_act_with_aa/amass_train_upright/*.pkl")
 
     # Use a defaultdict(list) to ensure all values are lists
     metadata_dump = defaultdict(list)
     hdf5_datasets = {} # Dictionary to hold h5py dataset objects
 
     # Open the HDF5 file once and keep it open for appending
-    with h5py.File(f'output/HumanoidIm/{exp_name}/phc_act/phc_act_{motion_file_name}_run_jump_forward_backward.h5', 'w') as hdf5_file:
+    with h5py.File(f'output/HumanoidIm/{exp_name}/phc_act_with_aa/phc_act_{motion_file_name}.h5', 'w') as hdf5_file:
         
         # Process the files one by one
         for i, file in enumerate(tqdm(pkl_files)):
@@ -87,7 +87,7 @@ if __name__ == "__main__":
             metadata_dump[key] = value[-1] # or np.mean(value, axis=0)
         # Add other aggregation logic here for other metadata keys
         
-    joblib.dump(metadata_dump, f'output/HumanoidIm/{exp_name}/phc_act/phc_act_{motion_file_name}_run_jump_forward_backward_metadata.pkl', compress=True)
+    joblib.dump(metadata_dump, f'output/HumanoidIm/{exp_name}/phc_act_with_aa/phc_act_{motion_file_name}.pkl', compress=True)
 
     print("Dataset successfully written to HDF5 file, no longer dumping to a single .pkl")
 

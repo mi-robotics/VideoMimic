@@ -170,8 +170,8 @@ class IMAMPPlayerContinuous(amp_players.AMPPlayerContinuous):
 
                 if humanoid_env.collect_dataset:
                     motion_file = humanoid_env.cfg.env.motion_file.split('/')[-1].split('.')[0]
-                    dump_dir = osp.join(self.config['network_path'], "phc_act", motion_file, f"noise_{humanoid_env.add_action_noise}_{humanoid_env.action_noise_std}_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}.pkl")
-                    os.makedirs(osp.join(self.config['network_path'], "phc_act", motion_file), exist_ok=True)
+                    dump_dir = osp.join(self.config['network_path'], "phc_act_with_aa", motion_file, f"noise_{humanoid_env.add_action_noise}_{humanoid_env.action_noise_std}_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}.pkl")
+                    os.makedirs(osp.join(self.config['network_path'], "phc_act_with_aa", motion_file), exist_ok=True)
                     print("Dumping to: ", dump_dir)
                     joblib.dump({
                             "pdp_obs": self.pdp_obs_all, 

@@ -28,7 +28,7 @@ if __name__ == "__main__":
     motion_file_name = dataset_path.split("/")[-1].split(".")[0]
     exp_name = args.exp_name
     dataset_full = joblib.load(dataset_path)
-    num_envs = len(dataset_full) if len(dataset_full)  < 20 else 20
+    num_envs = len(dataset_full) if len(dataset_full)  < 512 else 512
     num_runs = args.num_runs
 
     assert exp_name == 'phc_kp_mcp_iccv'
@@ -54,7 +54,7 @@ if __name__ == "__main__":
                 collect_dataset=True \
                 env.add_action_noise={add_action_noise}   \
                 env.action_noise_std={action_noise_std} \
-                headless=False \
+                headless=True \
                 " 
         print(cmd)
         os.system(cmd)
